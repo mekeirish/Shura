@@ -1,0 +1,1296 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Shura Core - Moteur de Délibération Collective</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://unpkg.com/wink-nlp/dist/wink-nlp.min.js"></script>
+    <script src="https://unpkg.com/wink-eng-lite-web-model/dist/wink-eng-lite-web-model.min.js"></script>
+    <style>
+        body {
+            background-color: #12161a;
+            color: #e2e8f0;
+            font-family: system-ui, -apple-system, sans-serif;
+            overflow: hidden;
+        }
+        .cyber-panel {
+            background: linear-gradient(145deg, #161b22, #0f1318);
+            box-shadow: 5px 5px 15px #0a0d10, -5px -5px 15px #1a212a;
+        }
+        .node-btn {
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 3px 3px 8px #0a0d10, -3px -3px 8px #1a212a;
+        }
+        @keyframes pulse-ring {
+            0% { transform: scale(0.95); opacity: 1; }
+            100% { transform: scale(1.4); opacity: 0; }
+        }
+        .playing::after {
+            content: '';
+            position: absolute;
+            inset: -4px;
+            border: 2px solid currentColor;
+            border-radius: 9999px;
+            animation: pulse-ring 1.2s infinite;
+        }
+        .longest-path-node .node-btn {
+            box-shadow: 0 0 18px currentColor, 0 0 36px rgba(0,0,0,0.4);
+            filter: brightness(1.3);
+        }
+        .longest-path-label {
+            font-weight: 800;
+            color: #fff;
+            text-shadow: 0 0 6px currentColor;
+        }
+        .progress-bar-container {
+            width: 100%;
+            height: 6px;
+            background: #1f2937;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #ec4899, #f59e0b);
+            border-radius: 3px;
+            transition: width 0.1s linear;
+        }
+        /* Mode déplacement : seuls les boutons à l'intérieur de l'arbre deviennent inertes */
+        body.move-active #tree-container button {
+            pointer-events: none !important;
+        }
+        .node-selected-for-move {
+            outline: 3px solid white;
+            outline-offset: 6px;
+            border-radius: 12px;
+        }
+        @keyframes subtle-pulse {
+            0% { box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.5); }
+            70% { box-shadow: 0 0 0 8px rgba(34, 211, 238, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(34, 211, 238, 0); }
+        }
+        .move-active-indicator {
+            animation: subtle-pulse 1.5s infinite;
+        }
+        .stats-badge {
+            background: rgba(6, 182, 212, 0.15);
+            border: 1px solid rgba(6, 182, 212, 0.3);
+        }
+        .waveform-canvas {
+            width: 80px;
+            height: 18px;
+            margin-top: 2px;
+            opacity: 0.7;
+            border-radius: 4px;
+        }
+        .speed-badge {
+            transition: all 0.2s;
+        }
+        .keyboard-selected .node-btn {
+            outline: 3px solid #fbbf24;
+            outline-offset: 5px;
+            border-radius: 12px;
+        }
+        .focus-active {
+            background: #a855f7;
+            color: white;
+            border-color: #a855f7;
+        }
+        #loading-overlay {
+            position: fixed;
+            inset: 0;
+            background: #12161a;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+        }
+        .loader {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #06b6d4;
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .sentiment-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-left: 4px;
+            vertical-align: middle;
+        }
+
+        /* Pour le scroll fluide sur mobile */
+        #tree-container {
+            -webkit-overflow-scrolling: touch;
+            touch-action: pan-x pan-y;
+        }
+    </style>
+
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#4b6cb7">
+<link rel="apple-touch-icon" href="icon.png"></head>
+<body class="w-screen h-screen flex flex-col justify-between select-none">
+
+    <div id="loading-overlay"><div class="loader"></div></div>
+
+    <header class="w-full p-4 cyber-panel border-b border-gray-800 z-50 flex flex-col gap-2">
+        <div class="flex flex-wrap justify-between items-center gap-2">
+            <div>
+                <h1 class="text-sm font-bold tracking-wider uppercase text-cyan-400">Shura Core</h1>
+                <p class="text-xs text-gray-400">Clique sur "+ Branch" sous un nœud pour y répondre.</p>
+            </div>
+            <div class="flex items-center gap-2 flex-wrap">
+                <input id="search-input" type="text" placeholder="Rechercher..." class="px-3 py-1.5 rounded-lg bg-gray-800 border border-gray-700 text-white text-xs focus:outline-none focus:border-cyan-500 w-32" />
+                <button id="btn-focus" class="px-4 py-2 bg-gray-700 rounded-lg text-xs font-bold text-gray-300 shadow-lg active:scale-95 transition-all flex items-center gap-1">
+                    <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2zm0 18c-4.4 0-8-3.6-8-8s3.6-8 8-8 8 3.6 8 8-3.6 8-8 8zm0-14c-3.3 0-6 2.7-6 6s2.7 6 6 6 6-2.7 6-6-2.7-6-6-6zm0 10c-2.2 0-4-1.8-4-4s1.8-4 4-4 4 1.8 4 4-1.8 4-4 4z"/></svg>
+                    Focus
+                </button>
+                <button id="btn-toggle-move" class="px-4 py-2 bg-gray-700 rounded-lg text-xs font-bold text-gray-300 shadow-lg active:scale-95 transition-all flex items-center gap-1">
+                    <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M10 9h4V6h3l-5-5-5 5h3v3zm-1 1H6V7l-5 5 5 5v-3h3v-4zm14 2l-5-5v3h-3v4h3v3l5-5zm-9 3h-4v3H7l5 5 5-5h-3v-3z"/></svg>
+                    Déplacer
+                </button>
+                <button id="btn-play-longest" class="px-4 py-2 bg-gradient-to-r from-yellow-500 to-orange-600 rounded-lg text-xs font-bold text-white shadow-lg active:scale-95 transition-transform flex items-center gap-1">
+                    <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                    Lire la branche maîtresse
+                </button>
+                <button id="btn-create-root" class="px-4 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 rounded-lg text-xs font-bold text-white shadow-lg active:scale-95 transition-transform">
+                    + Nouvelle Shura
+                </button>
+                <button id="btn-export" class="px-4 py-2 bg-gradient-to-r from-purple-600 to-pink-600 rounded-lg text-xs font-bold text-white shadow-lg active:scale-95 transition-transform">
+                    Exporter
+                </button>
+                <div class="flex items-center gap-1">
+                    <span class="text-[10px] text-gray-400">Vitesse</span>
+                    <button id="btn-speed" class="speed-badge px-2 py-1 bg-gray-700 text-xs font-bold text-white rounded">1x</button>
+                </div>
+            </div>
+        </div>
+        <div id="move-banner" class="hidden text-[11px] text-cyan-300 font-bold text-center py-1 px-2 rounded bg-cyan-900/40 border border-cyan-800 move-active-indicator">
+            Mode déplacement activé – Clique sur un de tes nœuds puis sur le nouveau parent
+        </div>
+        <div id="stats-row" class="flex items-center gap-2 text-[10px] text-gray-400">
+            <span class="stats-badge px-2 py-0.5 rounded-full">🌳 Profondeur max : <span id="stat-depth">0</span></span>
+            <span class="stats-badge px-2 py-0.5 rounded-full">🌿 Branches approuvées : <span id="stat-branches">0</span></span>
+            <span id="stat-time-limit" class="stats-badge px-2 py-0.5 rounded-full">⏱️ Limite : Illimitée</span>
+        </div>
+    </header>
+
+    <main class="relative w-full flex-1 overflow-hidden bg-[#0d1013]">
+        <div id="tree-container" class="absolute inset-0 z-20" style="overflow: auto;"></div>
+        <svg id="svg-connections" class="absolute inset-0 w-full h-full pointer-events-none z-10"></svg>
+    </main>
+
+    <div id="record-modal" class="fixed inset-0 bg-black/80 z-50 flex items-center justify-center hidden p-4">
+        <div class="cyber-panel p-6 rounded-2xl w-full max-w-sm border border-gray-800 flex flex-col space-y-4">
+            <h3 id="modal-title" class="text-sm font-bold tracking-wider uppercase text-gray-300 text-center">Nouvel Audio</h3>
+            <input id="input-node-title" type="text" placeholder="Titre de l'audio (optionnel)..." class="w-full px-4 py-3 rounded-xl bg-[#0d1013] border border-gray-800 text-white text-sm focus:outline-none focus:border-cyan-500">
+            <div id="root-options" class="hidden flex-col space-y-2 mt-2">
+                <label class="text-[10px] uppercase tracking-widest text-gray-500 font-bold">Limite de temps par intervention</label>
+                <select id="input-time-limit" class="w-full px-4 py-2 rounded-xl bg-[#0d1013] border border-gray-800 text-white text-sm focus:outline-none focus:border-cyan-500">
+                    <option value="0">Illimité</option>
+                    <option value="30">30 secondes</option>
+                    <option value="60">1 minute</option>
+                    <option value="120">2 minutes</option>
+                    <option value="300">5 minutes</option>
+                </select>
+            </div>
+            <div class="flex flex-col items-center justify-center py-4 space-y-3">
+                <div id="rec-status" class="text-xs text-gray-400">Prêt à enregistrer</div>
+                <div class="flex items-center space-x-4">
+                    <button id="btn-rec-start" class="w-14 h-14 rounded-full bg-emerald-600 flex items-center justify-center text-white font-bold text-xs active:scale-90 transition-transform">REC</button>
+                    <button id="btn-rec-stop" class="w-14 h-14 rounded-full bg-red-600 flex items-center justify-center text-white font-bold text-xs active:scale-90 transition-transform hidden">STOP</button>
+                </div>
+                <div id="rec-progress-container" class="progress-bar-container hidden w-full">
+                    <div id="rec-progress-fill" class="progress-bar-fill" style="width: 100%;"></div>
+                </div>
+                <div id="transcript-status" class="text-[10px] text-gray-500 hidden">Transcription automatique en cours...</div>
+            </div>
+            <div class="flex space-x-2 pt-2">
+                <button id="btn-modal-cancel" class="flex-1 py-2.5 bg-gray-800 rounded-xl text-xs font-semibold text-gray-400 active:scale-95">Annuler</button>
+                <button id="btn-modal-validate" class="flex-1 py-2.5 bg-cyan-600 rounded-xl text-xs font-semibold text-white active:scale-95 opacity-50 cursor-not-allowed" disabled>Valider</button>
+            </div>
+        </div>
+    </div>
+
+    <footer class="w-full p-4 cyber-panel border-t border-gray-800 z-40 flex flex-col items-center space-y-2">
+        <span class="text-[10px] tracking-widest text-gray-500 uppercase font-bold">Simulateur Personne Connectée</span>
+        <div id="user-toggle-container" class="grid grid-cols-4 gap-2 w-full max-w-md"></div>
+        <div id="pending-container" class="hidden w-full max-w-md mt-2 space-y-2"></div>
+    </footer>
+
+    <script>
+        // --- CONFIGURATION ---
+        const USERS = [
+            { id: 'user1', name: 'Brahim', color: '#06b6d4' },
+            { id: 'user2', name: 'Samy', color: '#ec4899' },
+            { id: 'user3', name: 'Yanis', color: '#10b981' },
+            { id: 'user4', name: 'Lina', color: '#f59e0b' }
+        ];
+        let currentUser = USERS[0];
+        let parentIdForNewNode = null;
+        let globalTimeLimit = 0; // secondes, 0 = illimité
+        let recTimeout = null;
+        let recStartTime = null;
+        let audioNodes = [];
+        const nodeMap = {};
+
+        // --- winkNLP ---
+        let nlp = null;
+        let its = null;
+
+        async function initNLP() {
+            try {
+                nlp = winkNLP(winkEngLiteWebModel);
+                its = nlp.its;
+                console.log('✅ winkNLP initialisé');
+            } catch (e) {
+                console.warn('❌ winkNLP non disponible, analyse désactivée', e);
+            }
+        }
+
+        function analyzeTranscript(text) {
+            if (!nlp || !its || !text) return { keywords: [], sentiment: 0, summary: '' };
+            try {
+                const doc = nlp.readDoc(text);
+                const keywords = doc.tokens()
+                    .filter(t => t.out(its.pos) === 'NOUN' || t.out(its.pos) === 'PROPN')
+                    .out(its.normal)
+                    .filter((v, i, a) => a.indexOf(v) === i)
+                    .slice(0, 10);
+                const sentiment = doc.out(its.sentiment) || 0;
+                const sentences = doc.sentences().out();
+                let summary = '';
+                if (sentences.length > 0) {
+                    const stopWords = new Set(['the','is','at','which','on','a','an','and','or','but','in','with','to','for','of','that','this','was','are','were','be','been','being','have','has','had','do','does','did','will','would','could','should','may','might','shall','can','need','dare','ought','used','to','from','up','down','out','about','over','under','again','further','then','once','here','there','when','where','why','how','all','both','each','few','more','most','other','some','such','no','nor','not','only','own','same','so','than','too','very','s','t','just','don','now']);
+                    const wordFreq = {};
+                    doc.tokens().each(token => {
+                        const norm = token.out(its.normal).toLowerCase();
+                        if (!stopWords.has(norm) && norm.length > 1) {
+                            wordFreq[norm] = (wordFreq[norm] || 0) + 1;
+                        }
+                    });
+                    const scored = sentences.map(s => {
+                        const sDoc = nlp.readDoc(s);
+                        let score = 0;
+                        sDoc.tokens().each(token => {
+                            const norm = token.out(its.normal).toLowerCase();
+                            score += wordFreq[norm] || 0;
+                        });
+                        return { text: s, score };
+                    });
+                    scored.sort((a, b) => b.score - a.score);
+                    if (scored[0].score > 0) summary = scored[0].text;
+                }
+                return { keywords, sentiment, summary };
+            } catch (e) {
+                console.warn('Erreur analyse NLP', e);
+                return { keywords: [], sentiment: 0, summary: '' };
+            }
+        }
+
+        function rebuildNodeMap() {
+            for (const key in nodeMap) delete nodeMap[key];
+            audioNodes.forEach(n => nodeMap[n.id] = n);
+        }
+
+        let mediaRecorder;
+        let audioChunks = [];
+        let recordedAudioBlob = null;
+        let speechRecognition = null;
+        let finalTranscript = '';
+
+        let moveMode = false;
+        let nodeToMove = null;
+        let focusMode = false;
+        let searchQuery = '';
+
+        let playbackSpeed = 1.0;
+        const speedBtn = document.getElementById('btn-speed');
+        speedBtn.onclick = () => {
+            if (playbackSpeed === 1.0) { playbackSpeed = 1.5; speedBtn.innerText = '1.5x'; }
+            else if (playbackSpeed === 1.5) { playbackSpeed = 2.0; speedBtn.innerText = '2x'; }
+            else { playbackSpeed = 1.0; speedBtn.innerText = '1x'; }
+            if (currentAudio) currentAudio.playbackRate = playbackSpeed;
+            if (sequentialAudio) sequentialAudio.playbackRate = playbackSpeed;
+        };
+
+        // --- PERSISTANCE INDEXEDDB ---
+        const DB_NAME = 'shuraDB';
+        const DB_VERSION = 2;
+        const STORE_NODES = 'nodes';
+        const STORE_BLOBS = 'blobs';
+        let db = null;
+
+        function openDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(DB_NAME, DB_VERSION);
+                request.onupgradeneeded = (event) => {
+                    const db = event.target.result;
+                    if (!db.objectStoreNames.contains(STORE_NODES)) {
+                        db.createObjectStore(STORE_NODES, { keyPath: 'id' });
+                    }
+                    if (!db.objectStoreNames.contains(STORE_BLOBS)) {
+                        db.createObjectStore(STORE_BLOBS, { keyPath: 'id' });
+                    }
+                };
+                request.onsuccess = (event) => { db = event.target.result; resolve(db); };
+                request.onerror = (event) => reject(event.target.error);
+            });
+        }
+
+        async function saveNodeMeta(node) {
+            if (!db) await openDB();
+            const { audioBlob, ...meta } = node;
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(STORE_NODES, 'readwrite');
+                tx.objectStore(STORE_NODES).put(meta);
+                tx.oncomplete = resolve;
+                tx.onerror = reject;
+            });
+        }
+
+        async function saveBlob(nodeId, blob) {
+            if (!db) await openDB();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(STORE_BLOBS, 'readwrite');
+                tx.objectStore(STORE_BLOBS).put({ id: nodeId, blob });
+                tx.oncomplete = resolve;
+                tx.onerror = reject;
+            });
+        }
+
+        async function deleteNodeFromDB(id) {
+            if (!db) await openDB();
+            const tx = db.transaction([STORE_NODES, STORE_BLOBS], 'readwrite');
+            tx.objectStore(STORE_NODES).delete(id);
+            tx.objectStore(STORE_BLOBS).delete(id);
+            return new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = reject; });
+        }
+
+        async function loadNodesMeta() {
+            if (!db) await openDB();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(STORE_NODES, 'readonly');
+                const request = tx.objectStore(STORE_NODES).getAll();
+                request.onsuccess = () => {
+                    audioNodes = request.result || [];
+                    audioNodes.forEach(n => { if (!('audioBlob' in n)) n.audioBlob = undefined; });
+                    rebuildNodeMap();
+                    resolve();
+                };
+                request.onerror = reject;
+            });
+        }
+
+        async function loadBlob(nodeId) {
+            if (!db) await openDB();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(STORE_BLOBS, 'readonly');
+                const request = tx.objectStore(STORE_BLOBS).get(nodeId);
+                request.onsuccess = () => resolve(request.result?.blob || null);
+                request.onerror = reject;
+            });
+        }
+
+        async function ensureAudioBlob(node) {
+            if (!node || node.audioBlob) return node.audioBlob;
+            const blob = await loadBlob(node.id);
+            node.audioBlob = blob;
+            return blob;
+        }
+
+        // --- AFFICHAGE DE LA LIMITE DE TEMPS GLOBALE ---
+        function updateTimeLimitDisplay() {
+            const el = document.getElementById('stat-time-limit');
+            if (!el) return;
+            const labels = { 0: 'Illimitée', 30: '30s', 60: '1min', 120: '2min', 300: '5min' };
+            el.innerText = `⏱️ Limite : ${labels[globalTimeLimit] || 'Illimitée'}`;
+        }
+
+        // --- RENDER UTILISATEURS ---
+        const toggleContainer = document.getElementById('user-toggle-container');
+        USERS.forEach((u, idx) => {
+            const btn = document.createElement('button');
+            btn.id = `toggle-${u.id}`;
+            btn.className = `py-2 rounded-xl text-xs font-bold transition-all border ${idx === 0 ? 'bg-gray-800' : 'bg-transparent border-transparent text-gray-500'}`;
+            btn.style.color = idx === 0 ? u.color : '';
+            btn.style.borderColor = idx === 0 ? u.color : 'transparent';
+            btn.innerText = u.name;
+            btn.onclick = () => selectUser(u.id);
+            toggleContainer.appendChild(btn);
+        });
+
+        function selectUser(userId) {
+            currentUser = USERS.find(u => u.id === userId);
+            USERS.forEach(u => {
+                const b = document.getElementById(`toggle-${u.id}`);
+                if (u.id === userId) {
+                    b.className = "py-2 rounded-xl text-xs font-bold transition-all border bg-gray-800";
+                    b.style.color = u.color;
+                    b.style.borderColor = u.color;
+                } else {
+                    b.className = "py-2 rounded-xl text-xs font-bold transition-all bg-transparent border-transparent text-gray-500";
+                    b.style.color = '';
+                    b.style.borderColor = 'transparent';
+                }
+            });
+            updatePendingDisplay();
+        }
+
+        // --- GESTION DEMANDES ---
+        function getPendingBranchesForUser(userId) {
+            return audioNodes.filter(node => {
+                if (node.status !== 'pending') return false;
+                if (!node.parentId) return false;
+                const parentNode = nodeMap[node.parentId];
+                if (!parentNode) return false;
+                if (parentNode.user.id === userId) return true;
+                const approvedSibling = audioNodes.some(n =>
+                    n.parentId === node.parentId &&
+                    n.status === 'approved' &&
+                    n.user.id === userId
+                );
+                return approvedSibling;
+            });
+        }
+
+        function getPendingBranchesAsParent(userId) {
+            return audioNodes.filter(node => {
+                if (node.status !== 'pending') return false;
+                if (!node.parentId) return false;
+                const parentNode = nodeMap[node.parentId];
+                return parentNode && parentNode.user.id === userId;
+            });
+        }
+
+        function hasPendingAsParent() {
+            return getPendingBranchesAsParent(currentUser.id).length > 0;
+        }
+
+        function updatePendingDisplay() {
+            const container = document.getElementById('pending-container');
+            const pending = getPendingBranchesForUser(currentUser.id);
+            if (pending.length === 0) {
+                container.classList.add('hidden');
+                container.innerHTML = '';
+                return;
+            }
+            container.classList.remove('hidden');
+            let html = `<div class="text-[10px] uppercase tracking-widest text-yellow-400 font-bold mb-1">Demandes en attente (${pending.length})</div>`;
+            pending.forEach(node => {
+                html += `
+                <div class="flex items-center justify-between bg-gray-900/80 rounded-lg p-2 border border-gray-700">
+                    <span class="text-xs text-gray-300 truncate flex-1" title="${node.title}">${node.title}</span>
+                    <div class="flex gap-1 ml-2">
+                        <button class="play-pending-btn px-3 py-1 bg-cyan-700 text-white text-[10px] rounded font-bold active:scale-95 flex items-center justify-center" data-nodeid="${node.id}">▶</button>
+                        <button class="approve-btn px-3 py-1 bg-emerald-700 text-white text-[10px] rounded font-bold active:scale-95" data-nodeid="${node.id}">✓</button>
+                        <button class="reject-btn px-3 py-1 bg-red-700 text-white text-[10px] rounded font-bold active:scale-95" data-nodeid="${node.id}">✕</button>
+                    </div>
+                </div>`;
+            });
+            container.innerHTML = html;
+            container.querySelectorAll('.play-pending-btn').forEach(btn => btn.onclick = (e) => playAudio(e.currentTarget.dataset.nodeid));
+            container.querySelectorAll('.approve-btn').forEach(btn => btn.onclick = (e) => approveBranch(e.currentTarget.dataset.nodeid));
+            container.querySelectorAll('.reject-btn').forEach(btn => btn.onclick = (e) => rejectBranch(e.currentTarget.dataset.nodeid));
+        }
+
+        async function approveBranch(nodeId) {
+            const node = nodeMap[nodeId];
+            if (node) { node.status = 'approved'; await saveNodeMeta(node); renderTree(); recenterOnLongestPath(); updatePendingDisplay(); }
+        }
+
+        async function rejectBranch(nodeId) {
+            const pendingList = getPendingBranchesForUser(currentUser.id);
+            if (!pendingList.some(n => n.id === nodeId)) return;
+            const idsToRemove = new Set();
+            function collectDescendants(id) {
+                idsToRemove.add(id);
+                audioNodes.forEach(n => { if (n.parentId === id) collectDescendants(n.id); });
+            }
+            collectDescendants(nodeId);
+            for (const id of idsToRemove) { await deleteNodeFromDB(id); }
+            audioNodes = audioNodes.filter(n => !idsToRemove.has(n.id));
+            rebuildNodeMap();
+            renderTree(); recenterOnLongestPath(); updatePendingDisplay();
+        }
+
+        // --- ENREGISTREMENT + TRANSCRIPTION ---
+        const modal = document.getElementById('record-modal');
+        const btnRecStart = document.getElementById('btn-rec-start');
+        const btnRecStop = document.getElementById('btn-rec-stop');
+        const recStatus = document.getElementById('rec-status');
+        const btnValidate = document.getElementById('btn-modal-validate');
+        const inputTitle = document.getElementById('input-node-title');
+        const rootOptions = document.getElementById('root-options');
+        const progressContainer = document.getElementById('rec-progress-container');
+        const progressFill = document.getElementById('rec-progress-fill');
+        const transcriptStatus = document.getElementById('transcript-status');
+
+        function openRecordModal(parentId = null) {
+            if (parentId !== null && hasPendingAsParent()) {
+                alert("Tu as des demandes de validation en attente sur tes propres branches. Valide ou refuse-les avant d'en créer une nouvelle.");
+                return;
+            }
+            parentIdForNewNode = parentId;
+            inputTitle.value = ""; recordedAudioBlob = null; finalTranscript = '';
+            recStatus.innerText = "Prêt à enregistrer"; recStatus.className = "text-xs text-gray-400";
+            btnValidate.disabled = true; btnValidate.classList.add('opacity-50', 'cursor-not-allowed');
+            btnRecStart.classList.remove('hidden'); btnRecStop.classList.add('hidden');
+            progressContainer.classList.add('hidden'); transcriptStatus.classList.add('hidden');
+            clearProgressInterval();
+            if (parentId === null) {
+                rootOptions.classList.remove('hidden');
+                rootOptions.classList.add('flex');
+                document.getElementById('modal-title').innerText = "Créer la racine de la Shura";
+                document.getElementById('input-time-limit').value = globalTimeLimit;
+            } else {
+                rootOptions.classList.add('hidden');
+                rootOptions.classList.remove('flex');
+                document.getElementById('modal-title').innerText = "Répondre à l'audio";
+            }
+            modal.classList.remove('hidden');
+        }
+
+        function startSpeechRecognition() {
+            if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+                transcriptStatus.classList.add('hidden');
+                return;
+            }
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            speechRecognition = new SpeechRecognition();
+            speechRecognition.continuous = true;
+            speechRecognition.interimResults = true;
+            speechRecognition.lang = 'fr-FR';
+
+            speechRecognition.onresult = (event) => {
+                let interimTranscript = '';
+                for (let i = event.resultIndex; i < event.results.length; ++i) {
+                    if (event.results[i].isFinal) {
+                        finalTranscript += event.results[i][0].transcript + ' ';
+                    } else {
+                        interimTranscript += event.results[i][0].transcript;
+                    }
+                }
+                console.log('Transcription en cours:', finalTranscript + interimTranscript);
+            };
+
+            speechRecognition.onerror = (event) => {
+                console.warn('Erreur de reconnaissance vocale:', event.error);
+                transcriptStatus.innerText = 'Transcription indisponible';
+                speechRecognition = null;
+            };
+
+            speechRecognition.onend = () => {
+                if (speechRecognition) { try { speechRecognition.start(); } catch (e) {} }
+            };
+
+            speechRecognition.start();
+            transcriptStatus.classList.remove('hidden');
+        }
+
+        function stopSpeechRecognition() {
+            if (speechRecognition) { speechRecognition.stop(); speechRecognition = null; transcriptStatus.classList.add('hidden'); }
+        }
+
+        let progressInterval = null;
+        function clearProgressInterval() { if (progressInterval) { clearInterval(progressInterval); progressInterval = null; } }
+        function startProgressBar(durationSeconds) {
+            progressContainer.classList.remove('hidden');
+            progressFill.style.width = '100%';
+            recStartTime = Date.now();
+            clearProgressInterval();
+            progressInterval = setInterval(() => {
+                const elapsed = (Date.now() - recStartTime) / 1000;
+                const remaining = durationSeconds - elapsed;
+                progressFill.style.width = remaining <= 0 ? '0%' : (remaining / durationSeconds * 100) + '%';
+                if (remaining <= 0) clearProgressInterval();
+            }, 50);
+        }
+
+        btnRecStart.onclick = async () => {
+            audioChunks = [];
+            let currentTimeLimit = globalTimeLimit; // pour les branches, on utilise la limite globale
+            if (parentIdForNewNode === null) {
+                currentTimeLimit = parseInt(document.getElementById('input-time-limit').value, 10);
+            }
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                let options = {};
+                if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) options = { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 16000 };
+                else if (MediaRecorder.isTypeSupported('audio/mp4;codecs=mp4a.40.2')) options = { mimeType: 'audio/mp4;codecs=mp4a.40.2', audioBitsPerSecond: 16000 };
+                mediaRecorder = new MediaRecorder(stream, options);
+                mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+                mediaRecorder.onstop = () => {
+                    recordedAudioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
+                    console.log(`🎤 Poids : ${(recordedAudioBlob.size / 1024).toFixed(2)} Ko`);
+                    recStatus.innerText = "Enregistrement terminé !"; recStatus.className = "text-xs text-emerald-400 font-bold";
+                    btnValidate.disabled = false; btnValidate.classList.remove('opacity-50', 'cursor-not-allowed');
+                    progressContainer.classList.add('hidden'); clearProgressInterval();
+                    stopSpeechRecognition();
+                };
+                mediaRecorder.start();
+                startSpeechRecognition();
+                btnRecStart.classList.add('hidden'); btnRecStop.classList.remove('hidden');
+                let limitMsg = currentTimeLimit > 0 ? ` (Max ${currentTimeLimit}s)` : "";
+                recStatus.innerText = `Enregistrement en cours...${limitMsg}`; recStatus.className = "text-xs text-red-500 animate-pulse font-bold";
+                if (currentTimeLimit > 0) {
+                    startProgressBar(currentTimeLimit);
+                    recTimeout = setTimeout(() => {
+                        if (mediaRecorder && mediaRecorder.state !== "inactive") {
+                            btnRecStop.click();
+                            recStatus.innerText = `Temps max atteint (${currentTimeLimit}s) !`;
+                            recStatus.className = "text-xs text-orange-400 font-bold";
+                        }
+                    }, currentTimeLimit * 1000);
+                } else {
+                    progressContainer.classList.add('hidden');
+                }
+            } catch (err) { alert("Accès micro refusé ou indisponible."); }
+        };
+
+        btnRecStop.onclick = () => {
+            if (recTimeout) { clearTimeout(recTimeout); recTimeout = null; }
+            clearProgressInterval();
+            stopSpeechRecognition();
+            if (mediaRecorder && mediaRecorder.state !== "inactive") {
+                mediaRecorder.stop(); mediaRecorder.stream.getTracks().forEach(track => track.stop());
+                btnRecStop.classList.add('hidden'); btnRecStart.classList.remove('hidden'); progressContainer.classList.add('hidden');
+            }
+        };
+
+        document.getElementById('btn-modal-cancel').onclick = () => {
+            if (recTimeout) clearTimeout(recTimeout);
+            clearProgressInterval();
+            stopSpeechRecognition();
+            modal.classList.add('hidden');
+        };
+        document.getElementById('btn-create-root').onclick = () => openRecordModal(null);
+
+        btnValidate.onclick = async () => {
+            if (parentIdForNewNode === null) {
+                globalTimeLimit = parseInt(document.getElementById('input-time-limit').value, 10);
+                updateTimeLimitDisplay();
+            }
+            const title = inputTitle.value.trim() || "Sans titre";
+            let status = 'approved';
+            if (parentIdForNewNode !== null) {
+                const siblingCount = audioNodes.filter(n => n.parentId === parentIdForNewNode).length;
+                status = siblingCount === 0 ? 'approved' : 'pending';
+            }
+
+            const { keywords, sentiment, summary } = analyzeTranscript(finalTranscript.trim());
+
+            const newNode = {
+                id: `node_${Date.now()}`,
+                parentId: parentIdForNewNode,
+                title,
+                user: currentUser,
+                status,
+                transcript: finalTranscript.trim(),
+                keywords: keywords,
+                sentiment: sentiment,
+                summary: summary,
+                audioBlob: recordedAudioBlob
+            };
+            audioNodes.push(newNode);
+            nodeMap[newNode.id] = newNode;
+            await saveNodeMeta(newNode);
+            await saveBlob(newNode.id, recordedAudioBlob);
+            modal.classList.add('hidden');
+            renderTree(); recenterOnLongestPath(); updatePendingDisplay();
+        };
+
+        // --- CHAMP DE RECHERCHE ---
+        document.getElementById('search-input').addEventListener('input', (e) => {
+            searchQuery = e.target.value.trim().toLowerCase();
+            renderTree();
+            recenterOnLongestPath();
+        });
+
+        // --- BOUTON LIRE BRANCHE MAÎTRESSE ---
+        document.getElementById('btn-play-longest').onclick = async () => {
+            const approved = audioNodes.filter(n => n.status === 'approved');
+            if (approved.length === 0) return;
+            const structure = {}; approved.forEach(node => structure[node.id] = { ...node, children: [] });
+            const rootNodes = [];
+            approved.forEach(node => { if (node.parentId && structure[node.parentId]) structure[node.parentId].children.push(structure[node.id]); else rootNodes.push(structure[node.id]); });
+            const longestPath = findLongestPath(structure, rootNodes);
+            if (longestPath.length === 0) return;
+            playSequential(longestPath);
+        };
+
+        let sequentialAudio = null, sequentialQueue = [], sequentialIndex = 0;
+        async function playSequential(nodeIds) {
+            if (currentAudio) { currentAudio.pause(); if (currentBlobUrl) URL.revokeObjectURL(currentBlobUrl); currentAudio = null; currentBlobUrl = null; if (currentPlayingBtn) currentPlayingBtn.classList.remove('playing'); }
+            if (sequentialAudio) { sequentialAudio.pause(); sequentialAudio = null; }
+            sequentialQueue = nodeIds; sequentialIndex = 0;
+            await playNextInSequence();
+        }
+        async function playNextInSequence() {
+            if (sequentialIndex >= sequentialQueue.length) { sequentialAudio = null; return; }
+            const nodeId = sequentialQueue[sequentialIndex];
+            const node = nodeMap[nodeId];
+            if (!node) { sequentialIndex++; playNextInSequence(); return; }
+            const blob = await ensureAudioBlob(node);
+            if (!blob) { sequentialIndex++; playNextInSequence(); return; }
+            if (currentPlayingBtn) currentPlayingBtn.classList.remove('playing');
+            const btn = document.getElementById(`dom-${nodeId}`)?.querySelector('button');
+            if (btn) { btn.classList.add('playing'); currentPlayingBtn = btn; }
+            const blobUrl = URL.createObjectURL(blob);
+            sequentialAudio = new Audio(blobUrl);
+            sequentialAudio.playbackRate = playbackSpeed;
+            sequentialAudio.play();
+            sequentialAudio.onended = () => {
+                URL.revokeObjectURL(blobUrl);
+                if (currentPlayingBtn) currentPlayingBtn.classList.remove('playing');
+                sequentialIndex++; playNextInSequence();
+            };
+            sequentialAudio.onerror = () => {
+                URL.revokeObjectURL(blobUrl);
+                if (currentPlayingBtn) currentPlayingBtn.classList.remove('playing');
+                sequentialIndex++; playNextInSequence();
+            };
+        }
+
+        // --- MODE DÉPLACEMENT (corrigé) ---
+        const btnToggleMove = document.getElementById('btn-toggle-move');
+        const moveBanner = document.getElementById('move-banner');
+        btnToggleMove.onclick = () => {
+            moveMode = !moveMode;
+            if (moveMode) {
+                document.body.classList.add('move-active');
+                btnToggleMove.classList.replace('bg-gray-700', 'bg-cyan-700');
+                btnToggleMove.classList.replace('text-gray-300', 'text-white');
+                btnToggleMove.classList.add('move-active-indicator');
+                moveBanner.classList.remove('hidden');
+            } else {
+                document.body.classList.remove('move-active');
+                btnToggleMove.classList.replace('bg-cyan-700', 'bg-gray-700');
+                btnToggleMove.classList.replace('text-white', 'text-gray-300');
+                btnToggleMove.classList.remove('move-active-indicator');
+                moveBanner.classList.add('hidden');
+                clearMoveSelection();
+            }
+        };
+
+        function clearMoveSelection() {
+            if (nodeToMove) {
+                const el = document.getElementById(`dom-${nodeToMove}`);
+                if (el) el.classList.remove('node-selected-for-move');
+                nodeToMove = null;
+            }
+        }
+
+        function hasChildren(nodeId) { return audioNodes.some(n => n.parentId === nodeId); }
+
+        function isDescendant(ancestorId, targetId) {
+            const children = audioNodes.filter(n => n.parentId === ancestorId);
+            for (const child of children) {
+                if (child.id === targetId) return true;
+                if (isDescendant(child.id, targetId)) return true;
+            }
+            return false;
+        }
+
+        async function handleMoveClick(nodeId) {
+            if (!moveMode) return;
+            if (nodeToMove === null) {
+                const node = nodeMap[nodeId];
+                if (!node) return;
+                if (node.user.id !== currentUser.id) {
+                    alert("Tu ne peux déplacer que tes propres participations.");
+                    return;
+                }
+                if (hasChildren(nodeId)) {
+                    alert("Ce nœud a des enfants, il ne peut pas être déplacé.");
+                    return;
+                }
+                nodeToMove = nodeId;
+                const el = document.getElementById(`dom-${nodeId}`);
+                if (el) el.classList.add('node-selected-for-move');
+            } else {
+                if (nodeId === nodeToMove) { clearMoveSelection(); return; }
+                if (isDescendant(nodeToMove, nodeId)) {
+                    alert("Impossible de placer un nœud sous l'un de ses propres descendants.");
+                    return;
+                }
+                const node = nodeMap[nodeToMove];
+                if (node) {
+                    node.parentId = nodeId;
+                    node.status = 'pending';
+                    await saveNodeMeta(node);
+                }
+                clearMoveSelection();
+                moveMode = false;
+                document.body.classList.remove('move-active');
+                btnToggleMove.classList.replace('bg-cyan-700', 'bg-gray-700');
+                btnToggleMove.classList.replace('text-white', 'text-gray-300');
+                btnToggleMove.classList.remove('move-active-indicator');
+                moveBanner.classList.add('hidden');
+                renderTree(); recenterOnLongestPath(); updatePendingDisplay();
+            }
+        }
+
+        // --- MODE FOCUS ---
+        const btnFocus = document.getElementById('btn-focus');
+        btnFocus.onclick = () => {
+            focusMode = !focusMode;
+            if (focusMode) { btnFocus.classList.add('focus-active'); }
+            else { btnFocus.classList.remove('focus-active'); }
+            renderTree();
+            recenterOnLongestPath();
+        };
+
+        // --- MOTEUR DE RENDU ---
+        const container = document.getElementById('tree-container');
+        const svg = document.getElementById('svg-connections');
+        let isDragging = false, startX, startY, scrollLeft, scrollTop;
+
+        container.addEventListener('mousedown', (e) => {
+            if (e.target === container || e.target.id === 'tree-container') {
+                isDragging = true; startX = e.clientX; startY = e.clientY;
+                scrollLeft = container.scrollLeft; scrollTop = container.scrollTop;
+                container.style.cursor = 'grabbing'; e.preventDefault();
+            }
+        });
+        window.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            container.scrollLeft = scrollLeft - (e.clientX - startX);
+            container.scrollTop = scrollTop - (e.clientY - startY);
+        });
+        window.addEventListener('mouseup', () => { isDragging = false; container.style.cursor = ''; });
+
+        container.addEventListener('click', (e) => {
+            if (moveMode && (e.target === container || e.target.id === 'tree-container')) clearMoveSelection();
+        });
+
+        const waveformCache = new Map();
+        async function generateWaveform(blob) {
+            return new Promise((resolve) => {
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const reader = new FileReader();
+                reader.onload = async () => {
+                    try {
+                        const audioBuffer = await audioContext.decodeAudioData(reader.result);
+                        const rawData = audioBuffer.getChannelData(0);
+                        const samples = 80;
+                        const step = Math.floor(rawData.length / samples);
+                        const data = [];
+                        for (let i = 0; i < samples; i++) {
+                            let sum = 0;
+                            for (let j = 0; j < step; j++) {
+                                const idx = i * step + j;
+                                if (idx < rawData.length) sum += Math.abs(rawData[idx]);
+                            }
+                            data.push(sum / step);
+                        }
+                        const max = Math.max(...data) || 1;
+                        const normalized = data.map(v => v / max);
+                        resolve(normalized);
+                    } catch (e) { resolve(null); }
+                    audioContext.close();
+                };
+                reader.readAsArrayBuffer(blob);
+            });
+        }
+
+        async function drawWaveformOnCanvas(canvas, node) {
+            let blob = node.audioBlob;
+            if (!blob) { blob = await ensureAudioBlob(node); }
+            if (!blob) return;
+            if (waveformCache.has(node.id)) {
+                const data = waveformCache.get(node.id);
+                if (data) { paintCanvas(canvas, data); return; }
+            }
+            const data = await generateWaveform(blob);
+            waveformCache.set(node.id, data);
+            if (data) paintCanvas(canvas, data);
+        }
+
+        function paintCanvas(canvas, data) {
+            const ctx = canvas.getContext('2d');
+            const width = canvas.width;
+            const height = canvas.height;
+            ctx.clearRect(0, 0, width, height);
+            ctx.fillStyle = 'rgba(255,255,255,0.5)';
+            const barWidth = width / data.length;
+            for (let i = 0; i < data.length; i++) {
+                const barHeight = data[i] * height;
+                ctx.fillRect(i * barWidth, (height - barHeight) / 2, barWidth - 1, barHeight);
+            }
+        }
+
+        function matchesSearch(node) {
+            if (!searchQuery) return true;
+            const title = (node.title || '').toLowerCase();
+            const transcript = (node.transcript || '').toLowerCase();
+            const keywords = (node.keywords || []).join(' ').toLowerCase();
+            const summary = (node.summary || '').toLowerCase();
+            return title.includes(searchQuery) || transcript.includes(searchQuery) || keywords.includes(searchQuery) || summary.includes(searchQuery);
+        }
+
+        function renderTree() {
+            container.innerHTML = '';
+            const approvedNodes = audioNodes.filter(n => n.status === 'approved');
+            if (approvedNodes.length === 0) { svg.innerHTML = ''; updateStats(0, 0); return; }
+
+            const fullStructure = {};
+            approvedNodes.forEach(node => fullStructure[node.id] = { ...node, children: [] });
+            const rootNodesFull = [];
+            approvedNodes.forEach(node => {
+                if (node.parentId && fullStructure[node.parentId]) fullStructure[node.parentId].children.push(fullStructure[node.id]);
+                else rootNodesFull.push(fullStructure[node.id]);
+            });
+            const longestPathIds = findLongestPath(fullStructure, rootNodesFull);
+            const longestPathSet = new Set(longestPathIds);
+
+            let nodesToRender = approvedNodes;
+            if (focusMode) { nodesToRender = approvedNodes.filter(n => longestPathSet.has(n.id)); }
+            if (searchQuery) { nodesToRender = nodesToRender.filter(n => matchesSearch(n)); }
+
+            const structure = {};
+            nodesToRender.forEach(node => structure[node.id] = { ...node, children: [] });
+            const rootNodes = [];
+            nodesToRender.forEach(node => {
+                if (node.parentId && structure[node.parentId]) structure[node.parentId].children.push(structure[node.id]);
+                else rootNodes.push(structure[node.id]);
+            });
+
+            let currentXOffset = 0;
+            const levelHeight = 160, nodeWidth = 110, forestGap = 80;
+
+            function computePositions(node, depth) {
+                node.y = 40 + (depth * levelHeight);
+                if (node.children.length === 0) { node.x = currentXOffset; currentXOffset += nodeWidth; }
+                else {
+                    node.children.forEach(child => computePositions(child, depth + 1));
+                    node.x = (node.children[0].x + node.children[node.children.length - 1].x) / 2;
+                }
+            }
+
+            rootNodes.forEach((root, i) => {
+                computePositions(root, 0);
+                if (i < rootNodes.length - 1) currentXOffset += forestGap;
+            });
+
+            // Anti-collision
+            const nodesByDepth = {};
+            function collectByDepth(node, depth) {
+                if (!nodesByDepth[depth]) nodesByDepth[depth] = [];
+                nodesByDepth[depth].push(node);
+                node.children.forEach(child => collectByDepth(child, depth + 1));
+            }
+            rootNodes.forEach(root => collectByDepth(root, 0));
+
+            for (const depth in nodesByDepth) {
+                const nodesAtDepth = nodesByDepth[depth].sort((a, b) => a.x - b.x);
+                for (let i = 0; i < nodesAtDepth.length - 1; i++) {
+                    const gap = nodesAtDepth[i+1].x - nodesAtDepth[i].x;
+                    if (gap < nodeWidth + 15) {
+                        const shift = (nodeWidth + 15) - gap;
+                        for (let j = i + 1; j < nodesAtDepth.length; j++) {
+                            shiftSubtree(nodesAtDepth[j], shift);
+                        }
+                    }
+                }
+            }
+
+            function shiftSubtree(node, dx) {
+                node.x += dx;
+                node.children.forEach(child => shiftSubtree(child, dx));
+            }
+
+            const xAdjustment = (window.innerWidth / 2) - ((currentXOffset - nodeWidth) / 2) - 45;
+
+            const maxDepth = longestPathIds.length;
+            updateStats(maxDepth, approvedNodes.length);
+
+            if (keyboardSelectedId && !nodesToRender.some(n => n.id === keyboardSelectedId)) {
+                setKeyboardSelection(null);
+            }
+
+            nodesToRender.forEach(node => {
+                const calculated = structure[node.id];
+                const nodeEl = document.createElement('div');
+                nodeEl.id = `dom-${node.id}`;
+                nodeEl.className = "absolute flex flex-col items-center justify-center z-30 w-[95px]";
+                nodeEl.style.left = `${calculated.x + xAdjustment}px`;
+                nodeEl.style.top = `${calculated.y}px`;
+
+                const isInLongestPath = longestPathSet.has(node.id);
+                const pathClass = isInLongestPath ? 'longest-path-node' : '';
+                const titleClass = isInLongestPath ? 'longest-path-label' : 'text-gray-300';
+
+                const transcriptSnippet = node.transcript ? node.transcript.substring(0, 50) + (node.transcript.length > 50 ? '...' : '') : '';
+                const summarySnippet = node.summary ? node.summary.substring(0, 60) + (node.summary.length > 60 ? '...' : '') : '';
+                const keywordsSnippet = node.keywords?.length ? '🔑 ' + node.keywords.slice(0,5).join(', ') : '';
+                const sentiment = node.sentiment || 0;
+                const sentimentColor = sentiment > 0.2 ? '#10b981' : (sentiment < -0.2 ? '#ef4444' : '#9ca3af');
+                const sentimentEmoji = sentiment > 0.3 ? '😊' : (sentiment < -0.3 ? '😠' : '😐');
+
+                const tooltipText = [
+                    node.title,
+                    transcriptSnippet ? `💬 ${transcriptSnippet}` : '',
+                    summarySnippet ? `📌 ${summarySnippet}` : '',
+                    keywordsSnippet,
+                    `Sentiment : ${sentimentEmoji}`
+                ].filter(Boolean).join('\n');
+
+                nodeEl.innerHTML = `
+                    <div class="text-[10px] font-bold text-center truncate w-full mb-1 ${titleClass}" title="${tooltipText.replace(/"/g, '&quot;')}">${node.title}
+                        <span class="sentiment-dot" style="background-color:${sentimentColor};" title="${sentimentEmoji}"></span>
+                    </div>
+                    <button class="node-btn relative w-12 h-12 rounded-full flex items-center justify-center border-2 transition-all bg-[#161b22] ${pathClass}" 
+                            style="border-color: ${node.user.color}; color: ${node.user.color};" onclick="playAudio('${node.id}')">
+                        <svg class="w-5 h-5 fill-current play-icon" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                    </button>
+                    <span class="text-[8px] mt-0.5 text-gray-500 font-mono">${node.user.name}</span>
+                    <canvas class="waveform-canvas" width="80" height="18"></canvas>
+                    <button class="mt-1.5 px-2 py-0.5 rounded bg-gray-800/80 border border-gray-700 text-[9px] font-bold tracking-wide text-gray-400 hover:text-white transition-colors active:scale-95" 
+                            onclick="openRecordModal('${node.id}')">+ Branch</button>
+                `;
+
+                nodeEl.addEventListener('click', (e) => {
+                    if (moveMode) { e.stopPropagation(); handleMoveClick(node.id); }
+                });
+
+                container.appendChild(nodeEl);
+                const canvas = nodeEl.querySelector('canvas');
+                drawWaveformOnCanvas(canvas, node);
+            });
+
+            // Calcul de la taille minimale pour activer le scroll
+            let maxX = 0, maxY = 0;
+            nodesToRender.forEach(node => {
+                const el = structure[node.id];
+                if (el.x + xAdjustment + nodeWidth > maxX) maxX = el.x + xAdjustment + nodeWidth;
+                if (el.y + 200 > maxY) maxY = el.y + 200;
+            });
+            container.style.minWidth = maxX + 100 + "px";
+            container.style.minHeight = maxY + 100 + "px";
+
+            setTimeout(() => drawBranches(structure, longestPathSet), 50);
+        }
+
+        function updateStats(depth, branches) {
+            document.getElementById('stat-depth').innerText = depth;
+            document.getElementById('stat-branches').innerText = branches;
+            updateTimeLimitDisplay();
+        }
+
+        function findLongestPath(structure, rootNodes) {
+            let maxDepth = -1, bestPath = [];
+            function dfs(nodeId, currentPath) {
+                const node = structure[nodeId];
+                const newPath = [...currentPath, nodeId];
+                if (node.children.length === 0) { if (newPath.length > maxDepth) { maxDepth = newPath.length; bestPath = newPath; } }
+                else node.children.forEach(child => dfs(child.id, newPath));
+            }
+            rootNodes.forEach(root => dfs(root.id, []));
+            return bestPath;
+        }
+
+        function drawBranches(structure, longestPathSet) {
+            svg.innerHTML = '';
+            const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+            svg.appendChild(defs);
+            const filter = document.createElementNS("http://www.w3.org/2000/svg", "filter");
+            filter.setAttribute("id", "glow");
+            filter.innerHTML = `<feGaussianBlur stdDeviation="3" result="coloredBlur"/><feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge>`;
+            defs.appendChild(filter);
+
+            Object.values(structure).forEach(node => {
+                node.children.forEach(child => {
+                    const pEl = document.getElementById(`dom-${node.id}`)?.querySelector('button');
+                    const cEl = document.getElementById(`dom-${child.id}`)?.querySelector('button');
+                    if (!pEl || !cEl) return;
+                    const pRect = pEl.getBoundingClientRect();
+                    const cRect = cEl.getBoundingClientRect();
+                    const containerRect = container.getBoundingClientRect();
+                    const x1 = pRect.left - containerRect.left + container.scrollLeft + pRect.width / 2;
+                    const y1 = pRect.top - containerRect.top + container.scrollTop + pRect.height / 2;
+                    const x2 = cRect.left - containerRect.left + container.scrollLeft + cRect.width / 2;
+                    const y2 = cRect.top - containerRect.top + container.scrollTop + cRect.height / 2;
+
+                    const isLongest = longestPathSet.has(node.id) && longestPathSet.has(child.id);
+                    const gradId = `grad-${node.id}-to-${child.id}`;
+                    const grad = document.createElementNS("http://www.w3.org/2000/svg", "linearGradient");
+                    grad.setAttribute("id", gradId);
+                    grad.setAttribute("x1", "0%"); grad.setAttribute("y1", "0%"); grad.setAttribute("x2", "0%"); grad.setAttribute("y2", "100%");
+                    const stop1 = document.createElementNS("http://www.w3.org/2000/svg", "stop");
+                    stop1.setAttribute("offset", "0%"); stop1.setAttribute("stop-color", node.user.color);
+                    const stop2 = document.createElementNS("http://www.w3.org/2000/svg", "stop");
+                    stop2.setAttribute("offset", "100%"); stop2.setAttribute("stop-color", child.user.color);
+                    grad.appendChild(stop1); grad.appendChild(stop2);
+                    defs.appendChild(grad);
+
+                    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                    const cpY = y1 + (y2 - y1) / 2;
+                    path.setAttribute("d", `M ${x1} ${y1} C ${x1} ${cpY}, ${x2} ${cpY}, ${x2} ${y2}`);
+                    path.setAttribute("stroke", `url(#${gradId})`);
+                    path.setAttribute("stroke-width", isLongest ? "4" : "2.5");
+                    path.setAttribute("fill", "none");
+                    path.setAttribute("opacity", isLongest ? "0.9" : "0.65");
+                    if (isLongest) path.setAttribute("filter", "url(#glow)");
+                    svg.appendChild(path);
+                });
+            });
+        }
+
+        function recenterOnLongestPath() {
+            const approvedNodes = audioNodes.filter(n => n.status === 'approved');
+            if (approvedNodes.length === 0) return;
+            const fullStructure = {};
+            approvedNodes.forEach(node => fullStructure[node.id] = { ...node, children: [] });
+            const rootNodesFull = [];
+            approvedNodes.forEach(node => {
+                if (node.parentId && fullStructure[node.parentId]) fullStructure[node.parentId].children.push(fullStructure[node.id]);
+                else rootNodesFull.push(fullStructure[node.id]);
+            });
+            const longestPath = findLongestPath(fullStructure, rootNodesFull);
+            if (longestPath.length === 0) return;
+            const leafId = longestPath[longestPath.length - 1];
+            const leafEl = document.getElementById(`dom-${leafId}`);
+            if (!leafEl) return;
+            const containerRect = container.getBoundingClientRect();
+            const leafRect = leafEl.getBoundingClientRect();
+            const targetScrollLeft = container.scrollLeft + (leafRect.left - containerRect.left) - (containerRect.width / 2) + (leafRect.width / 2);
+            const targetScrollTop = container.scrollTop + (leafRect.top - containerRect.top) - (containerRect.height / 2) + (leafRect.height / 2);
+            container.scrollTo({ left: Math.max(0, targetScrollLeft), top: Math.max(0, targetScrollTop), behavior: 'smooth' });
+        }
+
+        // --- LECTURE AUDIO ---
+        let currentAudio = null, currentBlobUrl = null, currentPlayingBtn = null;
+        async function playAudio(nodeId) {
+            const node = nodeMap[nodeId];
+            if (!node) return;
+            const blob = await ensureAudioBlob(node);
+            if (!blob) return;
+            const btn = document.getElementById(`dom-${nodeId}`)?.querySelector('button');
+            if (sequentialAudio) { sequentialAudio.pause(); sequentialAudio = null; }
+            if (currentAudio) {
+                currentAudio.pause();
+                if (currentBlobUrl) URL.revokeObjectURL(currentBlobUrl);
+                if (currentPlayingBtn) currentPlayingBtn.classList.remove('playing');
+                if (currentPlayingBtn === btn) { currentAudio = null; currentBlobUrl = null; currentPlayingBtn = null; return; }
+            }
+            currentBlobUrl = URL.createObjectURL(blob);
+            currentAudio = new Audio(currentBlobUrl);
+            currentAudio.playbackRate = playbackSpeed;
+            currentPlayingBtn = btn || null;
+            if (btn) btn.classList.add('playing');
+            currentAudio.play();
+            currentAudio.onended = () => {
+                if (btn) btn.classList.remove('playing');
+                URL.revokeObjectURL(currentBlobUrl);
+                currentBlobUrl = null; currentAudio = null; currentPlayingBtn = null;
+            };
+            currentAudio.onerror = () => {
+                URL.revokeObjectURL(currentBlobUrl);
+                if (btn) btn.classList.remove('playing');
+                currentBlobUrl = null; currentAudio = null; currentPlayingBtn = null;
+            };
+        }
+
+        // --- RACCOURCIS CLAVIER ---
+        let keyboardSelectedId = null;
+        function setKeyboardSelection(nodeId) {
+            if (keyboardSelectedId) {
+                const prev = document.getElementById(`dom-${keyboardSelectedId}`);
+                if (prev) prev.classList.remove('keyboard-selected');
+            }
+            keyboardSelectedId = nodeId;
+            if (nodeId) {
+                const el = document.getElementById(`dom-${nodeId}`);
+                if (el) el.classList.add('keyboard-selected');
+            }
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA' || document.getElementById('record-modal')?.classList.contains('hidden') === false) return;
+            const approved = audioNodes.filter(n => n.status === 'approved');
+            if (approved.length === 0) return;
+            const structure = {};
+            approved.forEach(node => structure[node.id] = { ...node, children: [] });
+            const rootNodes = [];
+            approved.forEach(node => { if (node.parentId && structure[node.parentId]) structure[node.parentId].children.push(structure[node.id]); else rootNodes.push(structure[node.id]); });
+            const longestPath = findLongestPath(structure, rootNodes);
+            if (longestPath.length === 0) return;
+            const branchNodeMap = {};
+            longestPath.forEach(id => branchNodeMap[id] = true);
+
+            switch (e.key) {
+                case 'ArrowRight':
+                    e.preventDefault();
+                    if (keyboardSelectedId && branchNodeMap[keyboardSelectedId]) {
+                        const node = structure[keyboardSelectedId];
+                        if (node && node.children.length > 0) {
+                            const childInPath = node.children.find(c => branchNodeMap[c.id]);
+                            if (childInPath) setKeyboardSelection(childInPath.id);
+                        }
+                    } else setKeyboardSelection(longestPath[0]);
+                    break;
+                case 'ArrowLeft':
+                    e.preventDefault();
+                    if (keyboardSelectedId && branchNodeMap[keyboardSelectedId]) {
+                        const node = structure[keyboardSelectedId];
+                        if (node && node.parentId) setKeyboardSelection(node.parentId);
+                    } else setKeyboardSelection(longestPath[0]);
+                    break;
+                case ' ':
+                    e.preventDefault();
+                    if (keyboardSelectedId) playAudio(keyboardSelectedId);
+                    break;
+                case 'l':
+                    e.preventDefault();
+                    playSequential(longestPath);
+                    break;
+                default: break;
+            }
+        });
+
+        // --- EXPORT ---
+        document.getElementById('btn-export').onclick = async () => {
+            const zip = new JSZip();
+            const exportData = audioNodes.map(node => ({
+                id: node.id, parentId: node.parentId, title: node.title, user: node.user.id, status: node.status,
+                transcript: node.transcript, keywords: node.keywords, sentiment: node.sentiment, summary: node.summary,
+                audioFileName: `${node.id}.webm`
+            }));
+            zip.file("shura_data.json", JSON.stringify(exportData, null, 2));
+            for (const node of audioNodes) {
+                const blob = await ensureAudioBlob(node);
+                if (blob) { const ext = blob.type.includes('mp4') ? 'mp4' : 'webm'; zip.file(`${node.id}.${ext}`, blob); }
+            }
+            const content = await zip.generateAsync({ type: "blob" });
+            const url = URL.createObjectURL(content);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `shura_export_${new Date().toISOString().slice(0,10)}.zip`;
+            a.click();
+            URL.revokeObjectURL(url);
+        };
+
+        // --- INITIALISATION ---
+        window.addEventListener('load', async () => {
+            await initNLP();
+            await loadNodesMeta();
+            renderTree();
+            recenterOnLongestPath();
+            updatePendingDisplay();
+            updateTimeLimitDisplay();
+            document.getElementById('loading-overlay').style.display = 'none';
+        });
+
+        window.addEventListener('resize', () => { renderTree(); recenterOnLongestPath(); });
+    </script>
+
+<script>if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js'));}</script>
+</body>
+</html>
